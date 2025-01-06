@@ -10,6 +10,17 @@ if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
   puppeteer = require('puppeteer')
 }
 
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*') // ! se puede cambiar  "*" para habilitar todos los puertos y evitar problemas de CORS
+  res.header('Access-Control-Allow-Credentials', 'true')
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Origin, X-Requested-With, Content-Type, Accept, ngrok-skip-browser-warning'
+  )
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE')
+  next()
+})
+
 app.get('/', async (req, res) => {
   res.status(200).send({ message: 'ok' })
 })
