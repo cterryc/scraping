@@ -1,98 +1,118 @@
-const app = require("express")();
+const app = require('express')()
 
-let chrome = {};
-let puppeteer;
+let chrome = {}
+let puppeteer
 
 if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-  chrome = require("chrome-aws-lambda");
-  puppeteer = require("puppeteer-core");
+  chrome = require('chrome-aws-lambda')
+  puppeteer = require('puppeteer-core')
 } else {
-  puppeteer = require("puppeteer");
+  puppeteer = require('puppeteer')
 }
 
-app.get("/", async (req, res) => {
-  res.status(200).send({ message: "ok" });
-});
+app.get('/', async (req, res) => {
+  res.status(200).send({ message: 'ok' })
+})
 
-app.get("/prueba", async (req, res) => {
-  res.status(200).send({ message: "prueba" });
-});
+app.get('/prueba', async (req, res) => {
+  res.status(200).send({ message: 'prueba' })
+})
 
-app.get("/api/:character", async (req, res) => {
-  const { character } = req.params;
-  const urlCharacter = `https://armory.warmane.com/character/${character}/Icecrown/summary`;
-  let options = {};
+app.get('/api/:character', async (req, res) => {
+  const { character } = req.params
+  const urlCharacter = `https://armory.warmane.com/character/${character}/Icecrown/summary`
+  let options = {}
 
   if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
     options = {
-      args: [...chrome.args, "--hide-scrollbars", "--disable-web-security"],
+      args: [...chrome.args, '--hide-scrollbars', '--disable-web-security'],
       defaultViewport: chrome.defaultViewport,
       executablePath: await chrome.executablePath,
       headless: true,
-      ignoreHTTPSErrors: true,
-    };
+      ignoreHTTPSErrors: true
+    }
   }
-
+  let browser
   try {
-    let browser = await puppeteer.launch(options);
+    browser = await puppeteer.launch(options)
 
-    let page = await browser.newPage();
-    await page.goto(urlCharacter);
-    await page.waitForSelector(".item-left div div a");
+    let page = await browser.newPage()
+    await page.setRequestInterception(true)
+    page.on('request', (request) => {
+      const resourceType = request.resourceType()
+      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
+        request.abort()
+      } else {
+        request.continue()
+      }
+    })
+    try {
+      await page.goto(urlCharacter, {
+        waitUntil: 'domcontentloaded',
+        timeout: 10000
+      })
+      await page.waitForSelector('.item-left div div a', { timeout: 10000 }) // 5 segundos
+    } catch (error) {
+      throw new Error('No se pudo cargar la página o encontrar el selector')
+    }
 
     try {
       const elementos = await page.evaluate(() => {
-        const left = document.querySelectorAll(".item-left div div a");
-        const right = document.querySelectorAll(".item-right div div a");
-        const bottom = document.querySelectorAll(".item-bottom div div a");
+        const left = document.querySelectorAll('.item-left div div a')
+        const right = document.querySelectorAll('.item-right div div a')
+        const bottom = document.querySelectorAll('.item-bottom div div a')
 
         // Función para extraer atributos de un nodo
         const extractAttributes = (node) => {
-          const attrs = {};
+          const attrs = {}
           for (const attr of node.attributes) {
-            attrs[attr.name] = attr.value;
+            attrs[attr.name] = attr.value
           }
-          return attrs;
-        };
+          return attrs
+        }
 
         // Extrae atributos de <a> y <img> (si existe) en los elementos
         const extractElementsAttributes = (elements) => {
           return Array.from(elements).map((ele) => {
-            const aAttributes = extractAttributes(ele);
-            const imgElement = ele.querySelector("img");
+            const aAttributes = extractAttributes(ele)
+            const imgElement = ele.querySelector('img')
             const imgAttributes = imgElement
               ? extractAttributes(imgElement)
-              : null;
+              : null
 
-            return { ...aAttributes, ...imgAttributes };
-          });
-        };
+            return { ...aAttributes, ...imgAttributes }
+          })
+        }
 
-        const leftAttributes = extractElementsAttributes(left);
-        const rightAttributes = extractElementsAttributes(right);
-        const bottomAttributes = extractElementsAttributes(bottom);
+        const leftAttributes = extractElementsAttributes(left)
+        const rightAttributes = extractElementsAttributes(right)
+        const bottomAttributes = extractElementsAttributes(bottom)
 
         return {
           left: leftAttributes,
           right: rightAttributes,
-          bottom: bottomAttributes,
-        };
-      });
-      res.status(200).send(elementos);
+          bottom: bottomAttributes
+        }
+      })
+      res.status(200).send(elementos)
     } catch (error) {
-      res.status(400).send({ error: "error al cargar elementos" });
+      res.status(400).send({ error: 'error al cargar elementos' })
     }
-    console.log("Scrap here");
+    console.log('Scrap here')
   } catch (err) {
-    console.error({ error: "Error al resolver page" });
-    return null;
+    console.error({ error: 'Error al resolver page' })
+    return null
+  } finally {
+    if (browser) {
+      await browser.close()
+    }
   }
-});
+})
 
-const localPort = 3000;
+const localPort = 3000
 
 app.listen(process.env.PORT || localPort, () => {
-  console.log("Server started on port:", localPort);
-});
+  console.log('Server started on port:', localPort)
+})
 
-module.exports = app;
+module.exports = app
