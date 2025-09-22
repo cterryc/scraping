@@ -1,17 +1,12 @@
 const app = require('express')()
+const puppeteer = require('puppeteer')
 
-let chrome = {}
-let puppeteer
-
-if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-  chrome = require('chrome-aws-lambda')
-  puppeteer = require('puppeteer-core')
-} else {
-  puppeteer = require('puppeteer')
-}
+// Cache simple para evitar scrappings repetidos
+const cache = new Map()
+const CACHE_DURATION = 5 * 60 * 1000 // 5 minutos
 
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*') // ! se puede cambiar  "*" para habilitar todos los puertos y evitar problemas de CORS
+  res.header('Access-Control-Allow-Origin', '*')
   res.header('Access-Control-Allow-Credentials', 'true')
   res.header(
     'Access-Control-Allow-Headers',
@@ -22,49 +17,76 @@ app.use((req, res, next) => {
 })
 
 app.get('/', async (req, res) => {
-  res.status(200).send({ message: 'ok' })
-})
-
-app.get('/prueba', async (req, res) => {
-  res.status(200).send({ message: 'prueba' })
+  res.status(200).send({
+    message: 'Warmane Character Scraper API',
+    usage: 'GET /api/{character}',
+    cache: `${cache.size} characters cached`
+  })
 })
 
 app.get('/api/:character', async (req, res) => {
   const { character } = req.params
   const urlCharacter = `https://armory.warmane.com/character/${character}/Icecrown/summary`
-  let options = {}
 
-  if (process.env.AWS_LAMBDA_FUNCTION_VERSION) {
-    options = {
-      args: [...chrome.args, '--hide-scrollbars', '--disable-web-security'],
-      defaultViewport: chrome.defaultViewport,
-      executablePath: await chrome.executablePath,
-      headless: true,
-      ignoreHTTPSErrors: true
-    }
+  // Verificar cache primero
+  const cacheKey = character.toLowerCase()
+  const cachedData = cache.get(cacheKey)
+
+  if (cachedData && Date.now() - cachedData.timestamp < CACHE_DURATION) {
+    console.log(`Cache hit for ${character}`)
+    return res.status(200).send(cachedData.data)
   }
+
+  // Configuración optimizada para Railway gratuito
+  const options = {
+    headless: 'new',
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--hide-scrollbars',
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--memory-pressure-off', // Reducir presión de memoria
+      '--max_old_space_size=256' // Limitar uso de heap
+    ],
+    ignoreHTTPSErrors: true,
+    timeout: 30000
+  }
+
   let browser
   try {
+    console.log(`Starting scrape for ${character}`)
     browser = await puppeteer.launch(options)
 
-    let page = await browser.newPage()
+    const page = await browser.newPage()
+
+    // Reducir memoria bloqueando más recursos
     await page.setRequestInterception(true)
     page.on('request', (request) => {
       const resourceType = request.resourceType()
-      if (['image', 'stylesheet', 'font'].includes(resourceType)) {
+      if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
         request.abort()
       } else {
         request.continue()
       }
     })
+
+    // Configurar viewport pequeño para ahorrar memoria
+    await page.setViewport({ width: 800, height: 600 })
+
     try {
       await page.goto(urlCharacter, {
         waitUntil: 'domcontentloaded',
-        timeout: 10000
+        timeout: 20000
       })
-      await page.waitForSelector('.item-left div div a', { timeout: 10000 }) // 5 segundos
+      await page.waitForSelector('.item-left div div a', { timeout: 15000 })
     } catch (error) {
-      throw new Error('No se pudo cargar la página o encontrar el selector')
+      throw new Error(`No se pudo cargar la página para ${character}`)
     }
 
     try {
@@ -73,7 +95,6 @@ app.get('/api/:character', async (req, res) => {
         const right = document.querySelectorAll('.item-right div div a')
         const bottom = document.querySelectorAll('.item-bottom div div a')
 
-        // Función para extraer atributos de un nodo
         const extractAttributes = (node) => {
           const attrs = {}
           for (const attr of node.attributes) {
@@ -82,7 +103,6 @@ app.get('/api/:character', async (req, res) => {
           return attrs
         }
 
-        // Extrae atributos de <a> y <img> (si existe) en los elementos
         const extractElementsAttributes = (elements) => {
           return Array.from(elements).map((ele) => {
             const aAttributes = extractAttributes(ele)
@@ -90,29 +110,41 @@ app.get('/api/:character', async (req, res) => {
             const imgAttributes = imgElement
               ? extractAttributes(imgElement)
               : null
-
             return { ...aAttributes, ...imgAttributes }
           })
         }
 
-        const leftAttributes = extractElementsAttributes(left)
-        const rightAttributes = extractElementsAttributes(right)
-        const bottomAttributes = extractElementsAttributes(bottom)
-
         return {
-          left: leftAttributes,
-          right: rightAttributes,
-          bottom: bottomAttributes
+          left: extractElementsAttributes(left),
+          right: extractElementsAttributes(right),
+          bottom: extractElementsAttributes(bottom),
+          scrapedAt: new Date().toISOString()
         }
       })
+
+      // Guardar en cache
+      cache.set(cacheKey, {
+        data: elementos,
+        timestamp: Date.now()
+      })
+
+      // Limpiar cache si es muy grande (máximo 50 personajes)
+      if (cache.size > 50) {
+        const firstKey = cache.keys().next().value
+        cache.delete(firstKey)
+      }
+
+      console.log(`Successfully scraped ${character}`)
       res.status(200).send(elementos)
     } catch (error) {
-      res.status(400).send({ error: 'error al cargar elementos' })
+      console.error('Error al extraer elementos:', error.message)
+      res
+        .status(400)
+        .send({ error: `Error al cargar elementos para ${character}` })
     }
-    console.log('Scrap here')
   } catch (err) {
-    console.error({ error: 'Error al resolver page' })
-    return null
+    console.error('Error al resolver page:', err.message)
+    res.status(500).send({ error: 'Error interno del servidor' })
   } finally {
     if (browser) {
       await browser.close()
@@ -120,10 +152,25 @@ app.get('/api/:character', async (req, res) => {
   }
 })
 
-const localPort = 3000
+// Limpiar cache periódicamente
+setInterval(() => {
+  const now = Date.now()
+  for (const [key, value] of cache.entries()) {
+    if (now - value.timestamp > CACHE_DURATION) {
+      cache.delete(key)
+    }
+  }
+}, 60000) // Cada minuto
 
-app.listen(process.env.PORT || localPort, () => {
-  console.log('Server started on port:', localPort)
+const port = process.env.PORT || 3000
+
+app.listen(port, () => {
+  console.log(`Server started on port: ${port}`)
+  console.log(
+    `Memory usage: ${Math.round(
+      process.memoryUsage().heapUsed / 1024 / 1024
+    )}MB`
+  )
 })
 
 module.exports = app
