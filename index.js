@@ -98,6 +98,7 @@ app.get('/api/:character', async (req, res) => {
     }
       await page.waitForSelector('.item-left div div a', { timeout: 15000 })
     } catch (error) {
+      console.log('error ==>',error)
       throw new Error(`No se pudo cargar la página para ${character}`)
     }
 
