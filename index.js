@@ -78,12 +78,24 @@ app.get('/api/:character', async (req, res) => {
 
     // Configurar viewport pequeño para ahorrar memoria
     await page.setViewport({ width: 800, height: 600 })
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/114.0.0.0 Safari/537.36');
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'es-ES,es;q=0.9',
+      'Referer': 'https://warmane.com/'
+    });
+
 
     try {
       await page.goto(urlCharacter, {
-        waitUntil: 'domcontentloaded',
-        timeout: 20000
-      })
+        waitUntil: 'networkidle0',
+        timeout: 30000
+      });
+
+      const isCloudflareChallenge = await page.$('title');
+      const titleText = await page.evaluate(el => el.textContent, isCloudflareChallenge);
+      if (titleText.includes('Verificar que usted es un ser humano')) {
+      throw new Error('Cloudflare challenge detected');
+    }
       await page.waitForSelector('.item-left div div a', { timeout: 15000 })
     } catch (error) {
       throw new Error(`No se pudo cargar la página para ${character}`)
