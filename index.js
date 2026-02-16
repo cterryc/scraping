@@ -61,7 +61,7 @@ async function getBrowser() {
           '--disable-renderer-backgrounding'
         ],
         ignoreHTTPSErrors: true,
-        timeout: 15000
+        timeout: 13000
       }
 
       browserInstance = await puppeteer.launch(options)
@@ -92,7 +92,7 @@ app.use((req, res, next) => {
 
 // Timeout global para requests
 app.use((req, res, next) => {
-  req.setTimeout(15000) // 15 segundos
+  req.setTimeout(35000) // 35 segundos (mayor que los 15s internos + buffer)
   next()
 })
 
@@ -143,8 +143,11 @@ app.get('/cache/clear', (req, res) => {
 
 // Endpoint principal de scraping
 app.get('/api/:character', async (req, res) => {
+  const startTime = Date.now()
   const { character } = req.params
   const urlCharacter = `https://armory.warmane.com/character/${character}/Icecrown/summary`
+
+  console.log(`[REQUEST #${new Date().getTime()}] GET /api/${character}`)
 
   // Validar nombre del personaje
   if (!character || character.length < 2) {
@@ -156,7 +159,8 @@ app.get('/api/:character', async (req, res) => {
   const cachedData = cache.get(cacheKey)
 
   if (cachedData && Date.now() - cachedData.timestamp < CACHE_DURATION) {
-    console.log(`✓ Cache hit for ${character}`)
+    const elapsed = Date.now() - startTime
+    console.log(`✓ Cache hit for ${character} (${elapsed}ms)`)
     return res.status(200).send(cachedData.data)
   }
 
@@ -195,7 +199,7 @@ app.get('/api/:character', async (req, res) => {
         try {
           await page.goto(urlCharacter, {
             waitUntil: 'networkidle0',
-            timeout: 15000
+            timeout: 13000
           })
 
           // Detectar Cloudflare challenge
@@ -210,7 +214,7 @@ app.get('/api/:character', async (req, res) => {
             }
           }
 
-          await page.waitForSelector('.item-left div div a', { timeout: 15000 })
+          await page.waitForSelector('.item-left div div a', { timeout: 13000 })
         } catch (error) {
           console.error(`✗ Error loading page for ${character}:`, error.message)
           throw new Error(`No se pudo cargar la página para ${character}`)
@@ -279,9 +283,15 @@ app.get('/api/:character', async (req, res) => {
       }
     })
 
+    const elapsed = Date.now() - startTime
+    console.log(`✓ Completed scrape for ${character} in ${elapsed}ms`)
     res.status(200).send(resultado)
   } catch (err) {
-    console.error(`✗ Error scraping ${character}:`, err.message)
+    const elapsed = Date.now() - startTime
+    console.error(
+      `✗ Error scraping ${character} after ${elapsed}ms:`,
+      err.message
+    )
 
     if (err.message.includes('Cloudflare')) {
       res.status(503).send({
