@@ -1,7 +1,10 @@
 require('dotenv').config()
+const fs = require('fs')
 const app = require('express')()
 const axios = require('axios')
 const cheerio = require('cheerio')
+
+const COOKIES_FILE = 'cookies_warmane.txt'
 
 const cache = new Map()
 const CACHE_DURATION = 15 * 60 * 1000
@@ -22,6 +25,21 @@ function getRandomScrapeDoToken(excludeToken = null) {
   const selected = available[Math.floor(Math.random() * available.length)]
   console.log(`Using ScrapeDo token: ...${selected.slice(-8)}`)
   return selected
+}
+
+function saveCookies(response) {
+  const cookies = response.headers['set-cookie']
+  if (cookies) {
+    fs.writeFileSync(COOKIES_FILE, cookies.join('; '), 'utf8')
+    console.log(`Cookies saved to ${COOKIES_FILE}`)
+  }
+}
+
+function loadCookies() {
+  if (fs.existsSync(COOKIES_FILE)) {
+    return fs.readFileSync(COOKIES_FILE, 'utf8')
+  }
+  return null
 }
 
 const SLOT_CATEGORIES = {
@@ -140,10 +158,20 @@ async function scrapeFromWeb(character) {
 
   for (let attempt = 0; attempt < SCRAPEDO_TOKENS.length; attempt++) {
     usedToken = getRandomScrapeDoToken(usedToken)
-    const scrapedoUrl = `https://api.scrape.do/?token=${usedToken}&url=${targetUrl}&render=true&super=true&waitSelector=${waitSelector}`
+    const scrapedoUrl = `https://api.scrape.do/?token=${usedToken}&url=${targetUrl}&render=true&super=true&keep_headers=true&waitSelector=${waitSelector}`
+
+    const cookies = loadCookies()
+    const config = {
+      timeout: 30000
+    }
+    if (cookies) {
+      config.headers = { Cookie: cookies }
+      console.log(`Using cached cookies for warmane.com`)
+    }
 
     try {
-      const response = await axios.get(scrapedoUrl, { timeout: 30000 })
+      const response = await axios.get(scrapedoUrl, config)
+      saveCookies(response)
       const html = response.data
 
       const $ = cheerio.load(html)
